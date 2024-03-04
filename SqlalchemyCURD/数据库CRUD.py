@@ -103,4 +103,4 @@ class DBOperate:
             except BaseException as e:
                 transaction.rollback()  # 数据写入失败或者sql执行失败，会回滚这个事务中所有执行的sql，数据库中就不会出现报错整段数据
                 traceback.print_exc()
-                raise RuntimeError('出现错误，数据已回滚！',e)
+                raise RuntimeError('数据更新错误，数据已回滚！',e)
