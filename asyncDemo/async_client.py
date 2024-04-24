@@ -1,5 +1,6 @@
 import asyncio
 
+
 class async_request:
     def __init__(self,max_concurrency=5):
         self.semaphore = asyncio.Semaphore(max_concurrency)
@@ -21,7 +22,7 @@ class async_request:
         loop = asyncio.get_event_loop()
         loop.run_until_complete(asyncio.gather(self.request()))
 
-    def add_task(self, function, args=(), kwargs=None):
+    def add_task(self, function, *args, **kwargs):
         if kwargs is None:
             kwargs = {}
         self.queue.append((function, args, kwargs))
