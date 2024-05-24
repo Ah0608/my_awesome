@@ -2,9 +2,11 @@ import traceback
 from typing import Union
 
 from sqlalchemy import MetaData, Table, text
+from sqlalchemy.dialects.mysql import insert
+
 
 class DBOperate:
-    def __init__(self,db_engine):
+    def __init__(self, db_engine):
         self.engine = db_engine
 
         self.metadata = MetaData()
@@ -14,7 +16,7 @@ class DBOperate:
         """获取table对象"""
         return Table(table_name, self.metadata, autoload_with=self.engine)
 
-    def insert(self, table_name: Union[Table, str], item: Union[dict, list]):
+    def mysql_insert(self, table_name: Union[Table, str], item: Union[dict, list]):
         """
         :param table_name:
         :param item:
@@ -34,16 +36,18 @@ class DBOperate:
             transaction = connection.begin()  # 开始sql事务
             try:
                 if isinstance(item, dict):
-                    connection.execute(table.insert().values(**item))
+                    insert_stmt = insert(table).values(**item)
+                    update_stmt = insert_stmt.on_duplicate_key_update(**item)  # 主键或唯一索引重复则更新
+                    connection.execute(update_stmt)
                 elif isinstance(item, list):
                     connection.execute(table.insert(), item)
                 transaction.commit()  # 数据写入执行成功，数据提交到数据库文件
             except BaseException as e:
                 transaction.rollback()  # 数据写入失败或者sql执行失败，会回滚这个事务中所有执行的sql，数据库中就不会出现报错整段数据
                 traceback.print_exc()
-                raise RuntimeError('数据插入报错，数据已回滚！',e)
+                raise RuntimeError('数据插入报错，数据已回滚！', e)
 
-    def insert_all(self, data_list :list):
+    def insert_all(self, data_list: list):
         '''
         :param data_list: 例子[(tables.student_table, [student_dict,])]
         用法: 通过创建数据库的get_tables()方法获取所有表的名称、数据库引擎
@@ -69,7 +73,7 @@ class DBOperate:
             except BaseException as e:
                 transaction.rollback()
                 traceback.print_exc()
-                raise RuntimeError('执行出错请检查！',e)
+                raise RuntimeError('执行出错请检查！', e)
 
     def query(self, sql, **params):
         """
@@ -103,4 +107,4 @@ class DBOperate:
             except BaseException as e:
                 transaction.rollback()  # 数据写入失败或者sql执行失败，会回滚这个事务中所有执行的sql，数据库中就不会出现报错整段数据
                 traceback.print_exc()
-                raise RuntimeError('数据更新错误，数据已回滚！',e)
+                raise RuntimeError('出现错误，数据已回滚！', e)
