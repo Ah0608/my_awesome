@@ -2,109 +2,85 @@ import traceback
 from typing import Union
 
 from sqlalchemy import MetaData, Table, text
-from sqlalchemy.dialects.mysql import insert
+from sqlalchemy.dialects.mysql import insert as my_ins
+from sqlalchemy.dialects.postgresql import insert as pg_ins
+from sqlalchemy.orm import sessionmaker
 
 
 class DBOperate:
     def __init__(self, db_engine):
         self.engine = db_engine
-
+        self.tables_cache = {}
         self.metadata = MetaData()
         self.metadata.reflect(bind=db_engine)
+        self.session = sessionmaker(self.engine, expire_on_commit=False)
 
     def get_table(self, table_name: str) -> Table:
-        """获取table对象"""
-        return Table(table_name, self.metadata, autoload_with=self.engine)
+        if '.' in table_name:
+            schema, table_name = table_name.split('.')
+        else:
+            schema = None
+        cache_key = f"{schema}.{table_name}" if schema else table_name
+        if cache_key not in self.tables_cache:
+            table = Table(table_name, self.metadata, autoload_with=self.engine, schema=schema)
+            self.tables_cache[cache_key] = table
+        return self.tables_cache[cache_key]
 
-    def mysql_insert(self, table_name: Union[Table, str], item: Union[dict, list]):
-        """
-        :param table_name:
-        :param item:
-        用法: 将dict、list格式的数据插入到数据库表中
-        mysql_engine,tables = get_tables()
-        curd = DBOperate(mysql_engine)
-        student_dict = {'s_no':'2024002','s_name':'lisa','s_gender':'female','s_age':'18'}
-        grade_dict = [{'s_no':'2024002','course':'math','score':'98'},{'s_no':'2024002','course':'english','score':'95'}]
-        curd.insert(tables.student_table,student_dict)
-        curd.insert(tables.grade_table,grade_dict)
-        """
+    @staticmethod
+    def execute_transaction(session, stmt, data=None):
+        transaction = session.begin()
+        try:
+            session.execute(stmt, data)
+            transaction.commit()
+        except Exception as e:
+            transaction.rollback()
+            traceback.print_exc()
+            raise RuntimeError('sql执行, 已回滚!', e)
+
+    def my_insert(self, table_name: Union[Table, str], item: Union[dict, list]):
         if isinstance(table_name, str):
             table = self.get_table(table_name)
         else:
             table = table_name
-        with self.engine.connect() as connection:
-            transaction = connection.begin()  # 开始sql事务
-            try:
-                if isinstance(item, dict):
-                    insert_stmt = insert(table).values(**item)
-                    update_stmt = insert_stmt.on_duplicate_key_update(**item)  # 主键或唯一索引重复则更新
-                    connection.execute(update_stmt)
-                elif isinstance(item, list):
-                    connection.execute(table.insert(), item)
-                transaction.commit()  # 数据写入执行成功，数据提交到数据库文件
-            except BaseException as e:
-                transaction.rollback()  # 数据写入失败或者sql执行失败，会回滚这个事务中所有执行的sql，数据库中就不会出现报错整段数据
-                traceback.print_exc()
-                raise RuntimeError('数据插入报错，数据已回滚！', e)
+        with self.session() as sess:
+            if isinstance(item, dict):
+                insert_stmt = my_ins(table).values(**item)
+                stmt = insert_stmt.on_duplicate_key_update(**item)
+                self.execute_transaction(sess, stmt)
+            elif isinstance(item, list):
+                stmt = table.insert().values(item)
+                self.execute_transaction(sess, stmt)
+
+    def pg_insert(self, table_name: Union[Table, str], item: Union[dict, list], index_elements: list = None):
+        if isinstance(table_name, str):
+            table = self.get_table(table_name)
+        else:
+            table = table_name
+        with self.session() as sess:
+            if isinstance(item, dict):
+                insert_stmt = pg_ins(table).values(**item)
+                # stmt = insert_stmt.on_conflict_do_update(index_elements=index_elements, set_=item) # 更新
+                stmt = insert_stmt.on_conflict_do_nothing(index_elements=index_elements, set_=item) # 什么都不做
+            elif isinstance(item, list):
+                stmt = table.insert().values(item)
+            self.execute_transaction(sess, stmt)
 
     def insert_all(self, data_list: list):
-        '''
-        :param data_list: 例子[(tables.student_table, [student_dict,])]
-        用法: 通过创建数据库的get_tables()方法获取所有表的名称、数据库引擎
-        mysql_engine,tables = get_tables()
-        curd = DBOperate(mysql_engine)
-        data_list = []
-        student_dict = {'s_no':'2024002','s_name':'lisa','s_gender':'female','s_age':'18'}
-        data_list.append((tables.student_table, [student_dict]))
-        grade_dict = [{'s_no':'2024002','course':'math','score':'98'},{'s_no':'2024002','course':'english','score':'95'}]
-        data_list.append((tables.grade_table, grade_dict))
-        curd.insert_all(data_list)
-        '''
-        with self.engine.connect() as connection:
-            transaction = connection.begin()  # 开始sql 事务
-            try:
-                for table_name, value_list in data_list:
-                    if isinstance(table_name, str):
-                        table = self.get_table(table_name)
-                    else:
-                        table = table_name
-                    connection.execute(table.insert(), value_list)
-                transaction.commit()
-            except BaseException as e:
-                transaction.rollback()
-                traceback.print_exc()
-                raise RuntimeError('执行出错请检查！', e)
+        with self.session() as sess:
+            for table_name, value_list in data_list:
+                if isinstance(table_name, str):
+                    table = self.get_table(table_name)
+                else:
+                    table = table_name
+                self.execute_transaction(sess, table.insert().values(value_list))
 
     def query(self, sql, **params):
-        """
-        用法:
-        mysql_engine = create_engine("mysql+pymysql://root:root@localhost:3306/demo2",pool_recycle=3600)
-        curd = DBOperate(mysql_engine)
-        data = curd.query('SELECT * FROM student_info where s_no = :value1',value1='2024001')
-        for line in data:
-            print(line)
-        """
-        with self.engine.connect() as connection:
+        with self.session() as sess:
             stmt = text(sql)
-            # 执行查询操作
-            result = connection.execute(stmt, params)
+            result = sess.execute(stmt, params)
             return result.fetchall()
 
     def update(self, sql, **params):
-        """
-        用法:
-        mysql_engine = create_engine("mysql+pymysql://root:root@localhost:3306/demo2",pool_recycle=3600)
-        curd = DBOperate(mysql_engine)
-        curd.update('update student_info set s_age=:age where s_no=:sno',age=19,sno='2024002')
-        """
-        with self.engine.connect() as connection:
-            transaction = connection.begin()  # 开始sql 事务
-            try:
-                stmt = text(sql)
-                # 执行查询操作
-                connection.execute(stmt, params)
-                transaction.commit()  # 数据写入执行成功，数据提交到数据库
-            except BaseException as e:
-                transaction.rollback()  # 数据写入失败或者sql执行失败，会回滚这个事务中所有执行的sql，数据库中就不会出现报错整段数据
-                traceback.print_exc()
-                raise RuntimeError('出现错误，数据已回滚！', e)
+        with self.session() as sess:
+            stmt = text(sql)
+            self.execute_transaction(sess, stmt, params)

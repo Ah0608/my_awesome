@@ -2,7 +2,7 @@ import pika
 
 
 class RabbitMQ(object):
-    def __init__(self,host='localhost',port=5672,username='guest',password='guest'):
+    def __init__(self,host='192.168.1.149',port=5672,username='user_157',password='go_data_2333'):
 
         credentials = pika.PlainCredentials(username, password)
         self._connection = pika.BlockingConnection(pika.ConnectionParameters(host,port,heartbeat=0, credentials=credentials))
@@ -64,3 +64,14 @@ class Consumer(RabbitMQ):
         # 指定回调函数，处理收到的消息
         self._channel.basic_consume(queue=self._queue_name, on_message_callback=function)
         return self._channel
+
+
+class Count(RabbitMQ):
+    def __init__(self, queue_name):
+        super(Count, self).__init__()
+        self._queue_name = queue_name
+        self.method_frame = self._channel.queue_declare(queue=self._queue_name, durable=True)
+
+    def query_counts(self):
+        message_count = self.method_frame.method.message_count
+        return message_count
